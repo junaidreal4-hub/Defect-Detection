@@ -19,6 +19,22 @@ def find_best_threshold(labels: list, scores: list) -> float:
     best_idx = np.argmax(j_scores)
     return float(thresholds[best_idx])
 
+def compute_threshold_from_training(model, train_loader, device="cpu", percentile=99):
+    """
+    Runs inference on the training set (all normal images) and sets the
+    threshold at a high percentile of their scores. Anything above what
+    normal images typically score gets flagged as anomalous.
+    """
+    scores = []
+    for images, _, _ in train_loader:
+        for img in images:
+            score, _ = model.score(img.unsqueeze(0))
+            scores.append(score)
+
+    threshold = float(np.percentile(scores, percentile))
+    print(f"Training score stats — min: {min(scores):.3f}, max: {max(scores):.3f}, mean: {np.mean(scores):.3f}")
+    print(f"Threshold set at {percentile}th percentile: {threshold:.3f}")
+    return threshold
 
 def save_result_figure(original_path: str, overlay_bgr: np.ndarray, score: float, save_path: str):
     original = cv2.imread(original_path)

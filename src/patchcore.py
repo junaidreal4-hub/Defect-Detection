@@ -34,10 +34,6 @@ class PatchCore(nn.Module):
         with torch.no_grad():
             self.backbone(x)
 
-        # DEBUG: confirm hooks are firing fresh values each call
-        print(f"layer2 shape: {self.layer2_output.shape}, mean: {self.layer2_output.mean().item():.4f}")
-        print(f"layer3 shape: {self.layer3_output.shape}, mean: {self.layer3_output.mean().item():.4f}")
-
         layer3_up = nn.functional.interpolate(
             self.layer3_output,
             size=self.layer2_output.shape[-2:],
@@ -94,7 +90,6 @@ class PatchCore(nn.Module):
             selected.append(int(np.argmax(min_dists)))
 
         return pool_idx[np.array(selected)]
-
     def score(self, x: torch.Tensor):
         features = self.extract_features(x.to(self.device))
         patches, H, W = self._reshape_to_patches(features)

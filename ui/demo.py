@@ -32,7 +32,7 @@ def run_inference(image: np.ndarray, category: str):
     os.unlink(tmp_path)  # now safe to delete
 
     overlay_rgb = cv2.cvtColor(result["overlay_bgr"], cv2.COLOR_BGR2RGB)
-    label = "DEFECTIVE ⚠️" if result["score"] > 15.0 else "NORMAL ✅"
+    label = "DEFECTIVE ⚠️" if result["score"] > 4.3 else "NORMAL ✅"
     info  = f"**{label}**\nAnomaly score: `{result['score']}`"
 
     return overlay_rgb, info
