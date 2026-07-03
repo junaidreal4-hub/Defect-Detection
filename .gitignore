@@ -7,3 +7,4 @@ outputs/
 *.pt
 *.tiff
 .vscode/
+.claude

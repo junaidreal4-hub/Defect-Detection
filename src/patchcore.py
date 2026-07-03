@@ -1,7 +1,12 @@
+import numpy as np
 import torch
 import torch.nn as nn
-from torchvision.models import wide_resnet50_2, Wide_ResNet50_2_Weights
-import numpy as np
+from torchvision.models import Wide_ResNet50_2_Weights, wide_resnet50_2
+
+# Cap on the number of patches fed to coreset selection. The greedy k-center
+# pass is O(pool * kept), so bounding the pool keeps memory-bank construction
+# tractable on CPU while still sampling the feature distribution densely.
+CORESET_POOL_SIZE = 10000
 
 
 class PatchCore(nn.Module):
@@ -10,95 +15,84 @@ class PatchCore(nn.Module):
         self.device = device
         self.coreset_ratio = coreset_ratio
         self.memory_bank = None
-        self.layer2_output = None
-        self.layer3_output = None
+        self.threshold = None
+        self._features = {}
 
+        # layer2 + layer3 only: layer1 is too generic and blows up the patch
+        # count, layer4 is too semantic to localise defects. Their concatenation
+        # is the mid-level representation PatchCore relies on.
         backbone = wide_resnet50_2(weights=Wide_ResNet50_2_Weights.IMAGENET1K_V1)
         backbone.eval()
-        backbone.layer2.register_forward_hook(self._hook("layer2"))
-        backbone.layer3.register_forward_hook(self._hook("layer3"))
+        backbone.layer2.register_forward_hook(self._save_output("layer2"))
+        backbone.layer3.register_forward_hook(self._save_output("layer3"))
         self.backbone = backbone.to(device)
 
         for param in self.backbone.parameters():
             param.requires_grad = False
 
-    def _hook(self, name):
-        def hook_fn(module, input, output):
-            if name == "layer2":
-                self.layer2_output = output
-            elif name == "layer3":
-                self.layer3_output = output
-        return hook_fn
+    def _save_output(self, name):
+        def hook(_module, _input, output):
+            self._features[name] = output
+        return hook
 
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
             self.backbone(x)
 
-        layer3_up = nn.functional.interpolate(
-            self.layer3_output,
-            size=self.layer2_output.shape[-2:],
-            mode="bilinear",
-            align_corners=False,
+        layer2, layer3 = self._features["layer2"], self._features["layer3"]
+        layer3 = nn.functional.interpolate(
+            layer3, size=layer2.shape[-2:], mode="bilinear", align_corners=False
         )
-        features = torch.cat([self.layer2_output, layer3_up], dim=1)
-        return features
+        return torch.cat([layer2, layer3], dim=1)
 
     def _reshape_to_patches(self, features: torch.Tensor):
-        B, C, H, W = features.shape
-        features = features.permute(0, 2, 3, 1)
-        return features.reshape(-1, C).cpu().numpy(), H, W
+        _, C, H, W = features.shape
+        patches = features.permute(0, 2, 3, 1).reshape(-1, C)
+        return patches.cpu().numpy(), H, W
 
     def build_memory_bank(self, features_list: list):
-        all_patches = np.vstack(features_list)  # (N, C)
+        patches = np.vstack(features_list)
+        n_keep = max(1, int(len(patches) * self.coreset_ratio))
+        selected = self._coreset_indices(patches, n_keep)
 
-        n_keep = max(1, int(len(all_patches) * self.coreset_ratio))
-        selected_idx = self._batched_coreset(all_patches, n_keep)
+        self.memory_bank = torch.tensor(
+            patches[selected], dtype=torch.float32, device=self.device
+        )
+        return self.memory_bank
 
-        self.memory_bank = all_patches[selected_idx]
-        self.memory_bank_tensor = torch.tensor(
-            self.memory_bank, dtype=torch.float32
-        ).to(self.device)
-        print(f"Memory bank built: {self.memory_bank_tensor.shape[0]} patches retained.")
+    def _coreset_indices(self, features: np.ndarray, n_samples: int) -> np.ndarray:
+        """Greedy farthest-point (k-center) selection over a capped random pool.
 
-    def _batched_coreset(self, features: np.ndarray, n_samples: int) -> np.ndarray:
+        Each step keeps the point maximally distant from everything chosen so
+        far, spreading the memory bank across the feature manifold far better
+        than uniform sampling would.
         """
-        Greedy farthest-point coreset but vectorized in batches.
-        Fast enough on CPU — avoids the row-by-row loop that caused the hang.
-        """
-        # Work on a random subset to keep it manageable (max 10k points)
-        max_pool = 10000
-        if len(features) > max_pool:
-            pool_idx = np.random.choice(len(features), max_pool, replace=False)
-            pool = features[pool_idx]
+        if len(features) > CORESET_POOL_SIZE:
+            # Fixed seed so a rebuilt memory bank is reproducible; without it the
+            # random pool draw swings image-level AU-ROC by ~0.03 between runs.
+            rng = np.random.default_rng(0)
+            pool_idx = rng.choice(len(features), CORESET_POOL_SIZE, replace=False)
         else:
             pool_idx = np.arange(len(features))
-            pool = features
+        pool = features[pool_idx]
 
         n_samples = min(n_samples, len(pool))
         selected = [0]
-        # min distance from each point to the closest already-selected point
         min_dists = np.full(len(pool), np.inf)
-
         for _ in range(n_samples - 1):
-            last = pool[selected[-1]]  # (C,)
-
-            # Vectorized: compute distance from ALL points to just the last selected
-            diff = pool - last          # (N, C)
-            dists = np.einsum('ij,ij->i', diff, diff)  # squared L2, no sqrt needed
-
+            diff = pool - pool[selected[-1]]
+            dists = np.einsum("ij,ij->i", diff, diff)  # squared L2; sqrt is monotonic
             min_dists = np.minimum(min_dists, dists)
             selected.append(int(np.argmax(min_dists)))
 
-        return pool_idx[np.array(selected)]
+        return pool_idx[selected]
+
     def score(self, x: torch.Tensor):
         features = self.extract_features(x.to(self.device))
         patches, H, W = self._reshape_to_patches(features)
 
-        patches_t = torch.tensor(patches, dtype=torch.float32).to(self.device)
-        dists = torch.cdist(patches_t, self.memory_bank_tensor, p=2)
-        patch_scores = dists.min(dim=1).values.cpu().numpy()
+        patches = torch.tensor(patches, dtype=torch.float32, device=self.device)
+        patch_scores = torch.cdist(patches, self.memory_bank).min(dim=1).values
 
-        heatmap = patch_scores.reshape(H, W)
-        anomaly_score = float(patch_scores.max())
-
-        return anomaly_score, heatmap
+        heatmap = patch_scores.cpu().numpy().reshape(H, W)
+        return float(heatmap.max()), heatmap

@@ -1,13 +1,12 @@
-import os
 from pathlib import Path
+
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-
-# Standard ImageNet normalization — works well since we use a pretrained backbone
+# ImageNet statistics, matching the pretrained backbone the features come from.
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
-IMAGENET_STD  = [0.229, 0.224, 0.225]
+IMAGENET_STD = [0.229, 0.224, 0.225]
 
 
 def get_transforms(image_size=224):
@@ -19,12 +18,8 @@ def get_transforms(image_size=224):
 
 
 class MVTecDataset(Dataset):
-    """
-    Loads MVTec AD images for a single category.
-
-    train=True  → only loads the 'good' training images
-    train=False → loads all test images (good + defective)
-    """
+    """Single MVTec AD category. Training loads only defect-free images; the test
+    split loads every image, labelled 0 (good) or 1 (defective)."""
 
     def __init__(self, root: str, category: str, train: bool = True, image_size: int = 224):
         self.root = Path(root) / category
@@ -34,20 +29,16 @@ class MVTecDataset(Dataset):
 
     def _load_paths(self):
         paths, labels = [], []
-
         if self.train:
-            good_dir = self.root / "train" / "good"
-            for p in sorted(good_dir.glob("*.png")):
+            for p in sorted((self.root / "train" / "good").glob("*.png")):
                 paths.append(p)
-                labels.append(0)  # 0 = normal
+                labels.append(0)
         else:
-            test_dir = self.root / "test"
-            for defect_type in sorted(test_dir.iterdir()):
-                label = 0 if defect_type.name == "good" else 1
-                for p in sorted(defect_type.glob("*.png")):
+            for defect_dir in sorted((self.root / "test").iterdir()):
+                label = 0 if defect_dir.name == "good" else 1
+                for p in sorted(defect_dir.glob("*.png")):
                     paths.append(p)
                     labels.append(label)
-
         return paths, labels
 
     def __len__(self):

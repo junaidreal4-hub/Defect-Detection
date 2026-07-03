@@ -1,40 +1,37 @@
+import os
+import tempfile
+
+import cv2
 import gradio as gr
 import numpy as np
-import cv2
 from PIL import Image
-import tempfile
-import os
 
-from src.inference import load_model, predict
+from src.inference import available_categories, load_model, predict
 
-CATEGORIES = ["bottle", "cable", "capsule", "hazelnut", "metal_nut",
-              "pill", "screw", "toothbrush", "transistor", "zipper"]
-
-loaded_models = {}
+CATEGORIES = available_categories()
+_models = {}
 
 
 def run_inference(image: np.ndarray, category: str):
-    if category not in loaded_models:
+    if category not in _models:
         try:
-            loaded_models[category] = load_model(category)
+            _models[category] = load_model(category)
         except FileNotFoundError:
             return None, f"No trained model for '{category}'. Run train.py first."
 
-    model = loaded_models[category]
-
-    # Windows fix: write, close, then process, then delete
-    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-    tmp_path = tmp.name
-    tmp.close()  # close immediately so Windows releases the lock
-
+    # Stage the image on disk for predict(); close the handle before reading it
+    # back so Windows doesn't hold a lock on the file.
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        tmp_path = tmp.name
     Image.fromarray(image).save(tmp_path)
-    result = predict(model, tmp_path)
-    os.unlink(tmp_path)  # now safe to delete
+    try:
+        result = predict(_models[category], tmp_path)
+    finally:
+        os.unlink(tmp_path)
 
     overlay_rgb = cv2.cvtColor(result["overlay_bgr"], cv2.COLOR_BGR2RGB)
-    label = "DEFECTIVE ⚠️" if result["score"] > 4.3 else "NORMAL ✅"
-    info  = f"**{label}**\nAnomaly score: `{result['score']}`"
-
+    label = "DEFECTIVE ⚠️" if result["is_defective"] else "NORMAL ✅"
+    info = f"**{label}**\nAnomaly score: `{result['score']}`"
     return overlay_rgb, info
 
 
@@ -46,7 +43,8 @@ with gr.Blocks(title="Visual Defect Detection") as demo:
         image_input = gr.Image(label="Input Image", type="numpy")
         heatmap_output = gr.Image(label="Anomaly Heatmap")
 
-    category_select = gr.Dropdown(choices=CATEGORIES, value="bottle", label="Product Category")
+    category_select = gr.Dropdown(choices=CATEGORIES, value=CATEGORIES[0] if CATEGORIES else None,
+                                  label="Product Category")
     result_text = gr.Markdown()
     run_btn = gr.Button("Detect Defects", variant="primary")
 
