@@ -10,6 +10,8 @@ pinned: false
 license: mit
 ---
 
+<!-- Hugging Face Spaces configuration — required for HF deployment, ignore on GitHub -->
+
 # Visual Defect Detection — PatchCore on MVTec AD
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
