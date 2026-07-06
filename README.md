@@ -27,7 +27,7 @@ coreset-subsampled memory bank of normal patch features, and nearest-neighbour
 scoring. It ships a training pipeline, a TIFF exporter for the official MVTec
 evaluation, a FastAPI service, and a Gradio demo.
 
-![Defect localisation examples](https://raw.githubusercontent.com/junaidreal4-hub/defect-detection/refs/heads/assets/examples.png)
+![Live defect detection across MVTec AD categories](https://raw.githubusercontent.com/junaidreal4-hub/defect-detection/refs/heads/assets/demo.gif)
 
 ## Results
 
