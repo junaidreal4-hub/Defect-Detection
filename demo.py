@@ -1,5 +1,6 @@
 import os
 import tempfile
+from pathlib import Path
 
 import cv2
 import gradio as gr
@@ -24,6 +25,23 @@ from src.inference import available_categories, load_model, predict
 
 CATEGORIES = available_categories()
 _models = {}
+
+# Sample inputs bundled with the weights repo, so a visitor can try the demo
+# without sourcing their own MVTec image. Each entry is (filename, category);
+# any file missing after the download is dropped rather than breaking launch.
+_EXAMPLE_DIR = Path("outputs/memory_bank/examples")
+EXAMPLES = [
+    [str(_EXAMPLE_DIR / f), c]
+    for f, c in [
+        ("bottle_broken.png", "bottle"),
+        ("hazelnut_hole.png", "hazelnut"),
+        ("metal_nut_flip.png", "metal_nut"),
+        ("wood_hole.png", "wood"),
+        ("leather_glue.png", "leather"),
+        ("bottle_good.png", "bottle"),
+    ]
+    if (_EXAMPLE_DIR / f).exists()
+]
 
 
 def run_inference(image: np.ndarray, category: str):
@@ -61,6 +79,15 @@ with gr.Blocks(title="Visual Defect Detection") as demo:
                                   label="Product Category")
     result_text = gr.Markdown()
     run_btn = gr.Button("Detect Defects", variant="primary")
+
+    if EXAMPLES:
+        gr.Examples(
+            examples=EXAMPLES,
+            inputs=[image_input, category_select],
+            label="Try an example (no image handy? click one)",
+        )
+        gr.Markdown("_Sample images from the [MVTec AD dataset](https://www.mvtec.com/company/research/datasets/mvtec-ad) "
+                    "(CC BY-NC-SA 4.0)._")
 
     run_btn.click(
         fn=run_inference,
